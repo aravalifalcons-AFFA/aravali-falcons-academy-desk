@@ -204,7 +204,7 @@ const batchName=id=>{const b=S.batches.find(x=>x.id===id);return b?b.name:'No ba
 const coachName=id=>{const c=S.coaches.find(x=>x.id===id);return c?c.name:''};
 const academyName=()=>S.settings.name||DEFAULT_NAME;
 const graceDays=()=>{const n=Number(S.settings.dueDays);return n>=0&&S.settings.dueDays!==undefined&&S.settings.dueDays!==''?n:7};
-const planPrice=m=>Number(S.settings['price'+m])||0;
+const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.settings['price'+m])||0;
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
 const planEnd=p=>addDays(addMonths(p.start,p.months),-1);
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
@@ -224,7 +224,7 @@ function attPct(sid){
 }
 function coachDays(cid,month){const seen={};for(const k in S.catt){if(k.slice(0,7)===month){const v=S.catt[k][cid];if(v==='P'||v==='L')seen[k.slice(0,10)]=1}}return Object.keys(seen).length}
 const hasSample=()=>[S.students,S.batches,S.coaches,S.pays,S.plans].some(a=>a.some(x=>x.sample))||Object.keys(S._attSample||{}).length>0;
-const noPrices=()=>!planPrice(3)&&!planPrice(6)&&!planPrice(12);
+const noPrices=()=>CENTERS.every(c=>!PLANS.some(m=>planPrice(m,c.id)));
 
 /* ---------- subscriptions ---------- */
 let raf=0;const schedule=()=>{if(!raf)raf=requestAnimationFrame(()=>{raf=0;render()})};
@@ -453,26 +453,28 @@ function closeSheet(){$('#sheetRoot').innerHTML=''}
 
 const centerOpts=()=>CENTERS.map(c=>({v:c.id,t:c.name}));
 const batchOpts=cid=>[{v:'',t:'No batch'}].concat(S.batches.filter(b=>b.centerId===cid).map(b=>({v:b.id,t:b.name})));
-const planOpts=()=>PLANS.map(m=>({v:m,t:m+' months'+(planPrice(m)?' · '+inr(planPrice(m)):'')}));
+const planOpts=cid=>PLANS.map(m=>({v:m,t:m+' months'+(planPrice(m,cid)?' · '+inr(planPrice(m,cid)):'')}));
 const defCenter=()=>UI.center!=='all'?UI.center:CENTERS[0].id;
 
-function wirePlanFee(prefix){
-  const mo=document.getElementById('f_months'),fe=document.getElementById('f_fee');
-  if(mo&&fe)mo.addEventListener('change',()=>{const p=planPrice(Number(mo.value));if(p)fe.value=p});
+function wirePlanFee(prefix,cid){
+  const mo=document.getElementById('f_months'),fe=document.getElementById('f_fee'),cs=document.getElementById('f_centerId');
+  const price=()=>planPrice(Number(mo?.value||3),cs?.value||cid);
+  if(mo&&fe)mo.addEventListener('change',()=>{const p=price();if(p)fe.value=p});
+  if(cs&&mo&&fe)cs.addEventListener('change',()=>{const p=price();if(p)fe.value=p});
 }
 function studentForm(id){
   const ex=id?S.students.find(s=>s.id===id):null;
   const cid=ex?ex.centerId:defCenter();
   const fields=[{k:'name',label:'Full name'},{k:'centerId',label:'Center',type:'select',options:centerOpts()},{k:'batchId',label:'Batch',type:'select',options:batchOpts(cid)},{k:'dob',label:'Date of birth',type:'date'},{k:'guardian',label:'Parent or guardian'},{k:'phone',label:'Phone number',type:'tel'},{k:'joined',label:'Joined on',type:'date'}];
   if(ex)fields.push({k:'status',label:'Status',type:'select',options:[{v:'active',t:'Active'},{v:'inactive',t:'Inactive (left the academy)'}]});
-  else fields.push({k:'months',label:'Fee plan',type:'select',options:planOpts()},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'});
-  const values=ex||{centerId:cid,batchId:'',joined:today(),status:'active',months:3,start:today(),fee:planPrice(3)||''};
+  else fields.push({k:'months',label:'Fee plan',type:'select',options:planOpts(cid)},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'});
+  const values=ex||{centerId:cid,batchId:'',joined:today(),status:'active',months:3,start:today(),fee:planPrice(3,cid)||''};
   openSheet({title:ex?'Edit student':'Add student',required:['name'],fields,values,del:ex?{kind:'student',id:ex.id}:null,
     afterOpen(){
       const cs=document.getElementById('f_centerId'),bs=document.getElementById('f_batchId');
       cs.addEventListener('change',()=>{bs.innerHTML=batchOpts(cs.value).map(o=>'<option value="'+esc(o.v)+'">'+esc(o.t)+'</option>').join('')});
       if(ex&&ex.batchId)bs.value=ex.batchId;
-      wirePlanFee();
+      wirePlanFee(null,cid);
     },
     async onSave(v){
       const sid=id||db.collection('students').doc().id;
@@ -505,8 +507,8 @@ function planForm(sid,renew){
   if(renew&&cp){const nx=addDays(planEnd(cp),1);start=nx>today()?nx:today()}
   openSheet({title:(cp?'Renew plan · ':'Add plan · ')+st.name,required:['start'],submit:'Save plan',
     fields:[{k:'months',label:'Fee plan',type:'select',options:planOpts()},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'}],
-    values:{months,start,fee:planPrice(months)||(cp?cp.fee:'')},
-    afterOpen:wirePlanFee,
+    values:{months,start,fee:planPrice(months,st.centerId)||(cp?cp.fee:'')},
+    afterOpen:()=>wirePlanFee(null,st.centerId),
     onSave:v=>putDoc('plans',null,{studentId:sid,months:Number(v.months),start:v.start,fee:v.fee||0})});
 }
 function payForm(sid){
@@ -523,8 +525,8 @@ function payForm(sid){
 }
 function settingsForm(){
   openSheet({title:'Settings',required:['name'],
-    fields:[{k:'name',label:'Academy name'},{k:'price3',label:'3 month plan fee (₹)',type:'number'},{k:'price6',label:'6 month plan fee (₹)',type:'number'},{k:'price12',label:'12 month plan fee (₹)',type:'number'},{k:'dueDays',label:'Payment due within (days of plan start)',type:'number'}],
-    values:{name:academyName(),price3:planPrice(3)||'',price6:planPrice(6)||'',price12:planPrice(12)||'',dueDays:graceDays()},
+    fields:[{k:'name',label:'Academy name'},{k:'price3_c_stx',label:"St Xavier's · 3 month fee (₹)",type:'number'},{k:'price6_c_stx',label:"St Xavier's · 6 month fee (₹)",type:'number'},{k:'price12_c_stx',label:"St Xavier's · 12 month fee (₹)",type:'number'},{k:'price3_c_tulip',label:'Tulip · 3 month fee (₹)',type:'number'},{k:'price6_c_tulip',label:'Tulip · 6 month fee (₹)',type:'number'},{k:'price12_c_tulip',label:'Tulip · 12 month fee (₹)',type:'number'},{k:'dueDays',label:'Payment due within (days of plan start)',type:'number'}],
+    values:{name:academyName(),price3_c_stx:planPrice(3,'c_stx')||'',price6_c_stx:planPrice(6,'c_stx')||'',price12_c_stx:planPrice(12,'c_stx')||'',price3_c_tulip:planPrice(3,'c_tulip')||'',price6_c_tulip:planPrice(6,'c_tulip')||'',price12_c_tulip:planPrice(12,'c_tulip')||'',dueDays:graceDays()},
     onSave:v=>putDoc('settings','main',Object.assign({},S.settings,v))});
 }
 
