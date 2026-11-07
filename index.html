@@ -718,7 +718,12 @@ async function activateSession(session){
     authMessage=error?'Could not verify academy access: '+error.message:'This account is not authorised for Academy Desk. Ask an administrator to add it to academy_members.';
     render();return;
   }
-  currentUser=session.user;currentRole=member.role;currentCoachId=member.coach_id||null;
+  if(!['admin','coach'].includes(member.role)){
+    await sb.auth.signOut();currentUser=null;currentRole=null;currentCoachId=null;db=null;authReady=true;S.ready=true;
+    authMessage='This account has an unsupported Academy Desk role. Ask an administrator to verify its access.';
+    render();return;
+  }
+    currentUser=session.user;currentRole=member.role;currentCoachId=member.coach_id||null;
   if(currentRole==='coach'&&!currentCoachId){await sb.auth.signOut();currentUser=null;currentRole=null;currentCoachId=null;db=null;authReady=true;S.ready=true;authMessage='This coach account is not linked to a coach profile yet. Ask the administrator to finish account setup.';render();return}
   authMessage='';
   db=makeDbAdapter(sb);S.ready=false;S.dbOk=true;S.loaded={};
