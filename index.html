@@ -420,7 +420,7 @@ function render(){
   const sample=!isCoach()&&db&&S.ready&&hasSample()?'<div class="banner"><span>Sample data is loaded.</span><button class="btn sm" data-act="rmsample">Remove sample data</button></div>':'';
   const visibleCenters=isCoach()?CENTERS.filter(c=>S.batches.some(b=>b.centerId===c.id&&(b.coachIds||[]).includes(currentCoachId))):CENTERS;
   const cb=[['all','Both centers']].concat(visibleCenters.map(c=>[c.id,c.name]));
-  app.innerHTML='<div class="top"><div class="wrap"><div class="head"><div class="brand"><div class="logo" role="img" aria-label="Aravali Falcons logo"></div><div><small>Academy Desk</small><h1>'+esc(academyName())+'</h1></div></div><div style="display:flex;gap:8px;align-items:center"><button class="iconbtn" data-act="settings">Settings</button><button class="iconbtn" data-act="signout">Sign out</button></div></div>'+
+  app.innerHTML='<div class="top"><div class="wrap"><div class="head"><div class="brand"><div class="logo" role="img" aria-label="Aravali Falcons logo"></div><div><small>Academy Desk</small><h1>'+esc(academyName())+'</h1></div></div><div style="display:flex;gap:8px;align-items:center">'+(isCoach()?'':'<button class="iconbtn" data-act="settings">Settings</button>')+'<button class="iconbtn" data-act="signout">Sign out</button></div></div>'+
     '<div class="cbar" role="group" aria-label="Center">'+cb.map(c=>'<button data-act="center" data-v="'+c[0]+'" aria-pressed="'+(UI.center===c[0])+'">'+esc(c[1])+'</button>').join('')+'</div></div></div>'+
     '<nav class="tabs" aria-label="Sections"><div class="wrap">'+(isCoach()?[['attendance','Attendance'],['students','My students']]:ROUTES).map(x=>'<a href="#'+x[0]+'"'+(x[0]===r?' aria-current="page"':'')+'>'+x[1]+'</a>').join('')+'</div></nav>'+
     '<main class="wrap">'+sample+body+'</main>';
@@ -541,7 +541,7 @@ function settingsForm(){
 }
 
 /* ---------- attendance writes ---------- */
-function mark(kind,id,val){
+async function mark(kind,id,val){
   const isS=kind==='s';
   if(isCoach()&&isS){if(!S.students.some(s=>s.id===id&&coachBatchIds().includes(s.batchId))){toast('You can only mark students in your assigned batches.');return}const row={attendance_date:UI.attDate,student_id:id,status:val,updated_by:currentUser.id};const {error}=await sb.from('academy_attendance').upsert(row,{onConflict:'attendance_date,student_id'});if(error){toast('Attendance could not be saved: '+error.message);return}const old=S.attNormalized.findIndex(x=>x.attendance_date===UI.attDate&&x.student_id===id);if(old>=0)S.attNormalized[old]=row;else S.attNormalized.push(row);render();return}
   if(isCoach())return;
@@ -698,7 +698,7 @@ function makeDbAdapter(client){
 
 function authScreen(){
   const app=$('#app');
-  app.innerHTML='<div class="auth-wrap"><form class="auth-card" id="academyLoginForm"><div class="auth-brand">Aravali Falcons · Academy Desk</div><h2>Administrator sign in</h2><p>Sign in with the account authorised for your academy database.</p><label for="academyEmail">Email address</label><input id="academyEmail" name="email" type="email" autocomplete="username" required placeholder="you@example.com"><label for="academyPassword">Password</label><input id="academyPassword" name="password" type="password" autocomplete="current-password" required placeholder="Your password"><button id="academyLoginButton" type="submit">Sign in</button><div class="auth-error" id="academyAuthError" role="alert">'+esc(authMessage)+'</div></form></div>';
+  app.innerHTML='<div class="auth-wrap"><form class="auth-card" id="academyLoginForm"><div class="auth-brand">Aravali Falcons · Academy Desk</div><h2>Academy sign in</h2><p>Sign in with the account authorised for your academy database.</p><label for="academyEmail">Email address</label><input id="academyEmail" name="email" type="email" autocomplete="username" required placeholder="you@example.com"><label for="academyPassword">Password</label><input id="academyPassword" name="password" type="password" autocomplete="current-password" required placeholder="Your password"><button id="academyLoginButton" type="submit">Sign in</button><div class="auth-error" id="academyAuthError" role="alert">'+esc(authMessage)+'</div></form></div>';
   const form=$('#academyLoginForm');
   form.addEventListener('submit',async e=>{
     e.preventDefault();const button=$('#academyLoginButton'),error=$('#academyAuthError');
