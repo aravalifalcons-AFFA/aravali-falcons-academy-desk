@@ -23,6 +23,7 @@ create table if not exists public.academy_attendance (
 );
 
 alter table public.academy_attendance enable row level security;
+grant select, insert, update on public.academy_attendance to authenticated;
 
 -- Admins retain full control of normalized attendance.
 drop policy if exists "Admins can manage normalized attendance" on public.academy_attendance;
