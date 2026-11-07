@@ -42,42 +42,50 @@ with check (
   )
 );
 
--- Coaches may read only their assigned batch documents and students in those batches.
-drop policy if exists "Coaches can view assigned batches and students" on public.academy_documents;
-create policy "Coaches can view assigned batches and students"
-on public.academy_documents
-for select to authenticated
-using (
-  exists (
+-- SECURITY DEFINER helper avoids recursive RLS when checking a student's batch.
+-- It returns only a boolean and never exposes unrelated academy_documents rows.
+create or replace function public.aff_coach_can_view_document(
+  p_collection text,
+  p_id text,
+  p_data jsonb
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, auth, pg_temp
+as $$
+  select exists (
     select 1
     from public.academy_members m
     where m.user_id = (select auth.uid())
       and m.role = 'coach'
       and m.coach_id is not null
       and (
-        (
-          collection = 'batches'
-          and coalesce(data->'coachIds', '[]'::jsonb) ? m.coach_id
-        )
-        or
-        (
-          collection = 'students'
+        (p_collection = 'batches' and coalesce(p_data->'coachIds', '[]'::jsonb) ? m.coach_id)
+        or (p_collection = 'coaches' and p_id = m.coach_id)
+        or (
+          p_collection = 'students'
           and exists (
             select 1
             from public.academy_documents b
             where b.collection = 'batches'
-              and b.id = data->>'batchId'
+              and b.id = p_data->>'batchId'
               and coalesce(b.data->'coachIds', '[]'::jsonb) ? m.coach_id
           )
         )
-        or
-        (
-          collection = 'coaches'
-          and id = m.coach_id
-        )
       )
-  )
-);
+  );
+$$;
+
+revoke all on function public.aff_coach_can_view_document(text,text,jsonb) from public;
+grant execute on function public.aff_coach_can_view_document(text,text,jsonb) to authenticated;
+
+drop policy if exists "Coaches can view assigned batches and students" on public.academy_documents;
+create policy "Coaches can view assigned batches and students"
+on public.academy_documents
+for select to authenticated
+using (public.aff_coach_can_view_document(collection, id, data));
 
 -- A coach can read attendance only for students currently assigned to one of
 -- their batches. This is a separate normalized table so row-level security
