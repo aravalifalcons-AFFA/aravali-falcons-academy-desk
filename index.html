@@ -177,7 +177,7 @@ const centerShort=id=>(CENTERS.find(c=>c.id===id)||{}).short||'';
 const DEFAULT_NAME='ARAVALI FALCONS FOOTBALL ACADEMY';
 const PLANS=[3,6,12];
 
-const S={students:[],batches:[],coaches:[],plans:[],att:{},catt:{},pays:[],settings:{},loaded:{},ready:false,dbOk:true};
+const S={students:[],batches:[],coaches:[],plans:[],att:{},catt:{},pays:[],settings:{},attNormalized:[],loaded:{},ready:false,dbOk:true};
 function getPref(k,d){try{return localStorage.getItem(k)||d}catch(e){return d}}
 function setPref(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 const UI={center:CENTERS.some(c=>c.id===getPref('ad_center',''))?getPref('ad_center',''):'all',attCenter:'',attDate:today(),attBatch:'',attMode:'students',q:'',stuBatch:'',feeMonth:today().slice(0,7),feeFilter:'all'};
@@ -204,7 +204,7 @@ const batchName=id=>{const b=S.batches.find(x=>x.id===id);return b?b.name:'No ba
 const coachName=id=>{const c=S.coaches.find(x=>x.id===id);return c?c.name:''};
 const academyName=()=>S.settings.name||DEFAULT_NAME;
 const graceDays=()=>{const n=Number(S.settings.dueDays);return n>=0&&S.settings.dueDays!==undefined&&S.settings.dueDays!==''?n:7};
-const planPrice=m=>Number(S.settings['price'+m])||0;
+const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.settings['price'+m])||0;
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
 const planEnd=p=>addDays(addMonths(p.start,p.months),-1);
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
@@ -224,7 +224,7 @@ function attPct(sid){
 }
 function coachDays(cid,month){const seen={};for(const k in S.catt){if(k.slice(0,7)===month){const v=S.catt[k][cid];if(v==='P'||v==='L')seen[k.slice(0,10)]=1}}return Object.keys(seen).length}
 const hasSample=()=>[S.students,S.batches,S.coaches,S.pays,S.plans].some(a=>a.some(x=>x.sample))||Object.keys(S._attSample||{}).length>0;
-const noPrices=()=>!planPrice(3)&&!planPrice(6)&&!planPrice(12);
+const noPrices=()=>CENTERS.every(c=>!PLANS.some(m=>planPrice(m,c.id)));
 
 /* ---------- subscriptions ---------- */
 let raf=0;const schedule=()=>{if(!raf)raf=requestAnimationFrame(()=>{raf=0;render()})};
@@ -233,21 +233,28 @@ function subColl(name,path,apply){
 }
 const rows=snap=>snap.docs.map(d=>Object.assign({id:d.id},d.data()));
 const byName=(a,b)=>String(a.name).localeCompare(String(b.name));
-function checkReady(){if(!S.ready&&['students','batches','coaches','plans','att','catt','pays','settings'].every(k=>S.loaded[k]))S.ready=true}
+function checkReady(){const needed=currentRole==='coach'?['students','batches','coaches','attNormalized']:['students','batches','coaches','plans','att','catt','pays','settings'];if(!S.ready&&needed.every(k=>S.loaded[k]))S.ready=true}
+function loadNormalizedAttendance(){const refresh=async()=>{const {data,error}=await sb.from('academy_attendance').select('attendance_date,student_id,status,updated_at');if(error){S.dbOk=false;S.ready=true;schedule();return}S.attNormalized=data||[];S.loaded.attNormalized=true;checkReady();schedule()};refresh();const ch=sb.channel('affa-attendance-live').on('postgres_changes',{event:'*',schema:'public',table:'academy_attendance'},refresh).subscribe();activeChannels.add(ch)}
 function startSubs(){
   subColl('students','students',s=>{S.students=rows(s).sort(byName)});
   subColl('batches','batches',s=>{S.batches=rows(s).sort(byName)});
   subColl('coaches','coaches',s=>{S.coaches=rows(s).sort(byName)});
-  subColl('plans','plans',s=>{S.plans=rows(s)});
-  subColl('att','attendance',s=>{S.att={};S._attSample={};s.docs.forEach(d=>{const v=d.data();S.att[d.id]=v.records||{};if(v.sample)S._attSample[d.id]=true})});
-  subColl('catt','coachAttendance',s=>{S.catt={};s.docs.forEach(d=>{const v=d.data();S.catt[d.id]=v.records||{};if(v.sample)S._attSample[d.id+'_c']=true})});
-  subColl('pays','payments',s=>{S.pays=rows(s)});
-  db.doc('settings/main').onSnapshot(snap=>{S.settings=snap.exists?snap.data():{};S.loaded.settings=true;checkReady();schedule()},()=>{S.dbOk=false;S.ready=true;schedule()});
-  setTimeout(()=>{if(!S.ready){S.ready=true;schedule()}},4000);
+  loadNormalizedAttendance();
+  if(currentRole!=='coach'){
+    subColl('plans','plans',s=>{S.plans=rows(s)});
+    subColl('att','attendance',s=>{S.att={};S._attSample={};s.docs.forEach(d=>{const v=d.data();S.att[d.id]=v.records||{};if(v.sample)S._attSample[d.id]=true})});
+    subColl('catt','coachAttendance',s=>{S.catt={};s.docs.forEach(d=>{const v=d.data();S.catt[d.id]=v.records||{};if(v.sample)S._attSample[d.id+'_c']=true})});
+    subColl('pays','payments',s=>{S.pays=rows(s)});
+    db.doc('settings/main').onSnapshot(snap=>{S.settings=snap.exists?snap.data():{};S.loaded.settings=true;checkReady();schedule()},()=>{S.dbOk=false;S.ready=true;schedule()});
+  }
+  setTimeout(()=>{if(!S.ready){S.ready=true;schedule()}},5000);
 }
 
 /* ---------- views ---------- */
 const ROUTES=[['today','Today'],['attendance','Attendance'],['students','Students'],['batches','Batches'],['coaches','Coaches'],['fees','Fees']];
+let currentCoachId=null;
+const isCoach=()=>currentRole==='coach';
+const coachBatchIds=()=>S.batches.filter(b=>(b.coachIds||[]).includes(currentCoachId)).map(b=>b.id);
 const route=()=>{const h=location.hash.slice(1);return ROUTES.some(r=>r[0]===h)?h:'today'};
 const scopeLabel=()=>UI.center==='all'?'Both centers':centerName(UI.center);
 const cTag=x=>UI.center==='all'&&x.centerId?' · '+esc(centerShort(x.centerId)):'';
@@ -299,7 +306,7 @@ function viewToday(){
 }
 
 function viewAttendance(){
-  const eff=attCenter(),b=S.batches.filter(x=>x.centerId===eff);
+  const eff=attCenter(),b=S.batches.filter(x=>(!isCoach()||coachBatchIds().includes(x.id))&&(x.centerId===eff||isCoach()&&UI.center==='all'));
   if(UI.attMode==='students'&&!b.find(x=>x.id===UI.attBatch))UI.attBatch=(b.find(x=>(x.days||[]).includes(parse(UI.attDate).getDay()))||b[0]||{}).id||'';
   let h='<div class="pagehead"><div><h2>Attendance</h2><p>'+esc(dateLabel(UI.attDate))+' · '+esc(centerName(eff))+'</p></div></div>';
   h+='<div class="ctl"><div class="seg" role="group" aria-label="Who"><button data-act="attmode" data-v="students" aria-pressed="'+(UI.attMode==='students')+'">Students</button><button data-act="attmode" data-v="coaches" aria-pressed="'+(UI.attMode==='coaches')+'">Coaches</button></div>'+
@@ -309,11 +316,11 @@ function viewAttendance(){
   h+='</div>';
   if(UI.attMode==='students'){
     if(!b.length)return h+'<div class="panel empty"><h3>No batches at this center</h3><p>Create a batch and add students to start taking attendance.</p><div class="row"><button class="btn primary" data-act="addbatch">Add a batch</button></div></div>';
-    const bt=b.find(x=>x.id===UI.attBatch),st=S.students.filter(s=>s.status!=='inactive'&&s.batchId===UI.attBatch),rec=S.att[UI.attDate]||{};
+    const bt=b.find(x=>x.id===UI.attBatch),st=S.students.filter(s=>s.status!=='inactive'&&s.batchId===UI.attBatch),rec=Object.assign({},S.att[UI.attDate]||{},Object.fromEntries(S.attNormalized.filter(x=>x.attendance_date===UI.attDate).map(x=>[x.student_id,x.status])));
     const c=v=>st.filter(s=>rec[s.id]===v).length,un=st.filter(s=>!rec[s.id]).length;
     const sched=bt&&(bt.days||[]).includes(parse(UI.attDate).getDay());
     h+='<div class="row" style="justify-content:space-between"><div class="tally"><span><b>'+c('P')+'</b> present</span><span><b>'+c('A')+'</b> absent</span><span><b>'+c('L')+'</b> late</span><span><b>'+un+'</b> unmarked</span></div>'+
-      '<div class="row">'+(bt&&!sched?'<span class="chip warn">Not a usual session day</span>':'')+(st.length?'<button class="btn sm" data-act="attall">Mark all present</button>':'')+'</div></div>';
+      '<div class="row">'+(bt&&!sched?'<span class="chip warn">Not a usual session day</span>':'')+(st.length&&!isCoach()?'<button class="btn sm" data-act="attall">Mark all present</button>':'')+'</div></div>';
     if(!st.length)return h+'<div class="panel empty"><p>No students in this batch yet.</p><div class="row"><button class="btn primary" data-act="addstu">Add a student</button></div></div>';
     h+='<div class="panel list">'+st.map(s=>attRow(s.id,s.name,batchName(s.batchId),rec[s.id],'s')).join('')+'</div>';
   }else{
@@ -331,6 +338,8 @@ function attRow(id,name,sub,val,kind){
 }
 
 function viewStudents(){
+  if(isCoach()){const ids=coachBatchIds(),q=UI.q.trim().toLowerCase(),list=S.students.filter(s=>ids.includes(s.batchId)&&(s.status||'active')!=='inactive'&&(!q||(s.name||'').toLowerCase().includes(q)||(s.guardian||'').toLowerCase().includes(q)||(s.phone||'').includes(q)));let h='<div class="pagehead"><div><h2>My students</h2><p>Only students in your assigned batches.</p></div></div><div class="ctl"><label>Search<input type="search" id="q" data-bind="q" placeholder="Student, guardian or phone" value="'+esc(UI.q)+'"></label></div>';return h+(list.length?'<div class="panel list">'+list.map(s=>'<div class="item"><div class="grow"><div class="name">'+esc(s.name)+'</div><div class="sub">'+esc(batchName(s.batchId))+(s.guardian?' · Guardian: '+esc(s.guardian):'')+(s.phone?' · '+esc(s.phone):'')+'</div></div></div>').join('')+'</div>':'<div class="panel empty">No students are assigned to your batches yet.</div>')}
+
   const q=UI.q.trim().toLowerCase(),all=stuList(),act=activeStudents().length;
   const bl=batchList();if(UI.stuBatch&&!bl.find(b=>b.id===UI.stuBatch))UI.stuBatch='';
   let list=all.filter(s=>(!UI.stuBatch||s.batchId===UI.stuBatch)&&(!q||(s.name||'').toLowerCase().includes(q)||(s.guardian||'').toLowerCase().includes(q)||(s.phone||'').includes(q)));
@@ -404,15 +413,16 @@ function render(){
   if(!authReady){app.innerHTML='<div class="empty">Connecting securely to your academy…</div>';return}
   if(!currentUser){authScreen();return}
   const ae=document.activeElement,fid=ae&&app.contains(ae)?ae.id:'',pos=fid&&ae.selectionStart!=null?ae.selectionStart:null;
-  const r=route();let body;
+  const r=isCoach()?(route()==='students'?'students':'attendance'):route();let body;
   if(!S.ready)body='<div class="empty">Loading your academy…</div>';
   else if(!S.dbOk||!db)body='<div class="panel empty"><h3>Database connection unavailable</h3><p>Check your connection and refresh. If the problem continues, review your Supabase project settings and access policies.</p></div>';
-  else body=({today:viewToday,attendance:viewAttendance,students:viewStudents,batches:viewBatches,coaches:viewCoaches,fees:viewFees})[r]();
-  const sample=db&&S.ready&&hasSample()?'<div class="banner"><span>Sample data is loaded.</span><button class="btn sm" data-act="rmsample">Remove sample data</button></div>':'';
-  const cb=[['all','Both centers']].concat(CENTERS.map(c=>[c.id,c.name]));
-  app.innerHTML='<div class="top"><div class="wrap"><div class="head"><div class="brand"><div class="logo" role="img" aria-label="Aravali Falcons logo"></div><div><small>Academy Desk</small><h1>'+esc(academyName())+'</h1></div></div><div style="display:flex;gap:8px;align-items:center"><button class="iconbtn" data-act="settings">Settings</button><button class="iconbtn" data-act="signout">Sign out</button></div></div>'+
+  else body=(isCoach()?({attendance:viewAttendance,students:viewStudents}):({today:viewToday,attendance:viewAttendance,students:viewStudents,batches:viewBatches,coaches:viewCoaches,fees:viewFees}))[r]();
+  const sample=!isCoach()&&db&&S.ready&&hasSample()?'<div class="banner"><span>Sample data is loaded.</span><button class="btn sm" data-act="rmsample">Remove sample data</button></div>':'';
+  const visibleCenters=isCoach()?CENTERS.filter(c=>S.batches.some(b=>b.centerId===c.id&&(b.coachIds||[]).includes(currentCoachId))):CENTERS;
+  const cb=[['all','Both centers']].concat(visibleCenters.map(c=>[c.id,c.name]));
+  app.innerHTML='<div class="top"><div class="wrap"><div class="head"><div class="brand"><div class="logo" role="img" aria-label="Aravali Falcons logo"></div><div><small>Academy Desk</small><h1>'+esc(academyName())+'</h1></div></div><div style="display:flex;gap:8px;align-items:center">'+(isCoach()?'':'<button class="iconbtn" data-act="settings">Settings</button>')+'<button class="iconbtn" data-act="signout">Sign out</button></div></div>'+
     '<div class="cbar" role="group" aria-label="Center">'+cb.map(c=>'<button data-act="center" data-v="'+c[0]+'" aria-pressed="'+(UI.center===c[0])+'">'+esc(c[1])+'</button>').join('')+'</div></div></div>'+
-    '<nav class="tabs" aria-label="Sections"><div class="wrap">'+ROUTES.map(x=>'<a href="#'+x[0]+'"'+(x[0]===r?' aria-current="page"':'')+'>'+x[1]+'</a>').join('')+'</div></nav>'+
+    '<nav class="tabs" aria-label="Sections"><div class="wrap">'+(isCoach()?[['attendance','Attendance'],['students','My students']]:ROUTES).map(x=>'<a href="#'+x[0]+'"'+(x[0]===r?' aria-current="page"':'')+'>'+x[1]+'</a>').join('')+'</div></nav>'+
     '<main class="wrap">'+sample+body+'</main>';
   if(fid){const n=document.getElementById(fid);if(n){n.focus();if(pos!=null)try{n.setSelectionRange(pos,pos)}catch(e){}}}
 }
@@ -453,26 +463,28 @@ function closeSheet(){$('#sheetRoot').innerHTML=''}
 
 const centerOpts=()=>CENTERS.map(c=>({v:c.id,t:c.name}));
 const batchOpts=cid=>[{v:'',t:'No batch'}].concat(S.batches.filter(b=>b.centerId===cid).map(b=>({v:b.id,t:b.name})));
-const planOpts=()=>PLANS.map(m=>({v:m,t:m+' months'+(planPrice(m)?' · '+inr(planPrice(m)):'')}));
+const planOpts=cid=>PLANS.map(m=>({v:m,t:m+' months'+(planPrice(m,cid)?' · '+inr(planPrice(m,cid)):'')}));
 const defCenter=()=>UI.center!=='all'?UI.center:CENTERS[0].id;
 
-function wirePlanFee(prefix){
-  const mo=document.getElementById('f_months'),fe=document.getElementById('f_fee');
-  if(mo&&fe)mo.addEventListener('change',()=>{const p=planPrice(Number(mo.value));if(p)fe.value=p});
+function wirePlanFee(prefix,cid){
+  const mo=document.getElementById('f_months'),fe=document.getElementById('f_fee'),cs=document.getElementById('f_centerId');
+  const price=()=>planPrice(Number(mo?.value||3),cs?.value||cid);
+  if(mo&&fe)mo.addEventListener('change',()=>{const p=price();if(p)fe.value=p});
+  if(cs&&mo&&fe)cs.addEventListener('change',()=>{const p=price();if(p)fe.value=p});
 }
 function studentForm(id){
   const ex=id?S.students.find(s=>s.id===id):null;
   const cid=ex?ex.centerId:defCenter();
   const fields=[{k:'name',label:'Full name'},{k:'centerId',label:'Center',type:'select',options:centerOpts()},{k:'batchId',label:'Batch',type:'select',options:batchOpts(cid)},{k:'dob',label:'Date of birth',type:'date'},{k:'guardian',label:'Parent or guardian'},{k:'phone',label:'Phone number',type:'tel'},{k:'joined',label:'Joined on',type:'date'}];
   if(ex)fields.push({k:'status',label:'Status',type:'select',options:[{v:'active',t:'Active'},{v:'inactive',t:'Inactive (left the academy)'}]});
-  else fields.push({k:'months',label:'Fee plan',type:'select',options:planOpts()},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'});
-  const values=ex||{centerId:cid,batchId:'',joined:today(),status:'active',months:3,start:today(),fee:planPrice(3)||''};
+  else fields.push({k:'months',label:'Fee plan',type:'select',options:planOpts(cid)},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'});
+  const values=ex||{centerId:cid,batchId:'',joined:today(),status:'active',months:3,start:today(),fee:planPrice(3,cid)||''};
   openSheet({title:ex?'Edit student':'Add student',required:['name'],fields,values,del:ex?{kind:'student',id:ex.id}:null,
     afterOpen(){
       const cs=document.getElementById('f_centerId'),bs=document.getElementById('f_batchId');
       cs.addEventListener('change',()=>{bs.innerHTML=batchOpts(cs.value).map(o=>'<option value="'+esc(o.v)+'">'+esc(o.t)+'</option>').join('')});
       if(ex&&ex.batchId)bs.value=ex.batchId;
-      wirePlanFee();
+      wirePlanFee(null,cid);
     },
     async onSave(v){
       const sid=id||db.collection('students').doc().id;
@@ -505,8 +517,8 @@ function planForm(sid,renew){
   if(renew&&cp){const nx=addDays(planEnd(cp),1);start=nx>today()?nx:today()}
   openSheet({title:(cp?'Renew plan · ':'Add plan · ')+st.name,required:['start'],submit:'Save plan',
     fields:[{k:'months',label:'Fee plan',type:'select',options:planOpts()},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'}],
-    values:{months,start,fee:planPrice(months)||(cp?cp.fee:'')},
-    afterOpen:wirePlanFee,
+    values:{months,start,fee:planPrice(months,st.centerId)||(cp?cp.fee:'')},
+    afterOpen:()=>wirePlanFee(null,st.centerId),
     onSave:v=>putDoc('plans',null,{studentId:sid,months:Number(v.months),start:v.start,fee:v.fee||0})});
 }
 function payForm(sid){
@@ -523,14 +535,17 @@ function payForm(sid){
 }
 function settingsForm(){
   openSheet({title:'Settings',required:['name'],
-    fields:[{k:'name',label:'Academy name'},{k:'price3',label:'3 month plan fee (₹)',type:'number'},{k:'price6',label:'6 month plan fee (₹)',type:'number'},{k:'price12',label:'12 month plan fee (₹)',type:'number'},{k:'dueDays',label:'Payment due within (days of plan start)',type:'number'}],
-    values:{name:academyName(),price3:planPrice(3)||'',price6:planPrice(6)||'',price12:planPrice(12)||'',dueDays:graceDays()},
+    fields:[{k:'name',label:'Academy name'},{k:'price3_c_stx',label:"St Xavier's · 3 month fee (₹)",type:'number'},{k:'price6_c_stx',label:"St Xavier's · 6 month fee (₹)",type:'number'},{k:'price12_c_stx',label:"St Xavier's · 12 month fee (₹)",type:'number'},{k:'price3_c_tulip',label:'Tulip · 3 month fee (₹)',type:'number'},{k:'price6_c_tulip',label:'Tulip · 6 month fee (₹)',type:'number'},{k:'price12_c_tulip',label:'Tulip · 12 month fee (₹)',type:'number'},{k:'dueDays',label:'Payment due within (days of plan start)',type:'number'}],
+    values:{name:academyName(),price3_c_stx:planPrice(3,'c_stx')||'',price6_c_stx:planPrice(6,'c_stx')||'',price12_c_stx:planPrice(12,'c_stx')||'',price3_c_tulip:planPrice(3,'c_tulip')||'',price6_c_tulip:planPrice(6,'c_tulip')||'',price12_c_tulip:planPrice(12,'c_tulip')||'',dueDays:graceDays()},
     onSave:v=>putDoc('settings','main',Object.assign({},S.settings,v))});
 }
 
 /* ---------- attendance writes ---------- */
-function mark(kind,id,val){
-  const isS=kind==='s',coll=isS?'attendance':'coachAttendance',key=isS?UI.attDate:UI.attDate+'_'+attCenter(),cache=isS?S.att:S.catt;
+async function mark(kind,id,val){
+  const isS=kind==='s';
+  if(isCoach()&&isS){if(!S.students.some(s=>s.id===id&&coachBatchIds().includes(s.batchId))){toast('You can only mark students in your assigned batches.');return}const row={attendance_date:UI.attDate,student_id:id,status:val,updated_by:currentUser.id};const {error}=await sb.from('academy_attendance').upsert(row,{onConflict:'attendance_date,student_id'});if(error){toast('Attendance could not be saved: '+error.message);return}const old=S.attNormalized.findIndex(x=>x.attendance_date===UI.attDate&&x.student_id===id);if(old>=0)S.attNormalized[old]=row;else S.attNormalized.push(row);render();return}
+  if(isCoach())return;
+  const coll=isS?'attendance':'coachAttendance',key=isS?UI.attDate:UI.attDate+'_'+attCenter(),cache=isS?S.att:S.catt;
   cache[key]=Object.assign({},cache[key]||{},{[id]:val});render();
   save(async()=>{const ref=db.doc(coll+'/'+key),snap=await ref.get();
     if(snap.exists)await ref.update(isS?{records:{[id]:val},sample:false}:{records:{[id]:val},sample:false});else await ref.set({records:{[id]:val}})});
@@ -683,7 +698,7 @@ function makeDbAdapter(client){
 
 function authScreen(){
   const app=$('#app');
-  app.innerHTML='<div class="auth-wrap"><form class="auth-card" id="academyLoginForm"><div class="auth-brand">Aravali Falcons · Academy Desk</div><h2>Administrator sign in</h2><p>Sign in with the account authorised for your academy database.</p><label for="academyEmail">Email address</label><input id="academyEmail" name="email" type="email" autocomplete="username" required placeholder="you@example.com"><label for="academyPassword">Password</label><input id="academyPassword" name="password" type="password" autocomplete="current-password" required placeholder="Your password"><button id="academyLoginButton" type="submit">Sign in</button><div class="auth-error" id="academyAuthError" role="alert">'+esc(authMessage)+'</div></form></div>';
+  app.innerHTML='<div class="auth-wrap"><form class="auth-card" id="academyLoginForm"><div class="auth-brand">Aravali Falcons · Academy Desk</div><h2>Academy sign in</h2><p>Sign in with the account authorised for your academy database.</p><label for="academyEmail">Email address</label><input id="academyEmail" name="email" type="email" autocomplete="username" required placeholder="you@example.com"><label for="academyPassword">Password</label><input id="academyPassword" name="password" type="password" autocomplete="current-password" required placeholder="Your password"><button id="academyLoginButton" type="submit">Sign in</button><div class="auth-error" id="academyAuthError" role="alert">'+esc(authMessage)+'</div></form></div>';
   const form=$('#academyLoginForm');
   form.addEventListener('submit',async e=>{
     e.preventDefault();const button=$('#academyLoginButton'),error=$('#academyAuthError');
@@ -697,20 +712,27 @@ function authScreen(){
 
 async function activateSession(session){
   if(!session?.user){currentUser=null;currentRole=null;db=null;authReady=true;S.ready=true;render();return}
-  const {data:member,error}=await sb.from('academy_members').select('role').eq('user_id',session.user.id).maybeSingle();
+  const {data:member,error}=await sb.from('academy_members').select('role,coach_id').eq('user_id',session.user.id).maybeSingle();
   if(error||!member){
     await sb.auth.signOut();currentUser=null;currentRole=null;db=null;authReady=true;S.ready=true;
     authMessage=error?'Could not verify academy access: '+error.message:'This account is not authorised for Academy Desk. Ask an administrator to add it to academy_members.';
     render();return;
   }
-  currentUser=session.user;currentRole=member.role;authMessage='';
+  if(!['admin','coach'].includes(member.role)){
+    await sb.auth.signOut();currentUser=null;currentRole=null;currentCoachId=null;db=null;authReady=true;S.ready=true;
+    authMessage='This account has an unsupported Academy Desk role. Ask an administrator to verify its access.';
+    render();return;
+  }
+    currentUser=session.user;currentRole=member.role;currentCoachId=member.coach_id||null;
+  if(currentRole==='coach'&&!currentCoachId){await sb.auth.signOut();currentUser=null;currentRole=null;currentCoachId=null;db=null;authReady=true;S.ready=true;authMessage='This coach account is not linked to a coach profile yet. Ask the administrator to finish account setup.';render();return}
+  authMessage='';
   db=makeDbAdapter(sb);S.ready=false;S.dbOk=true;S.loaded={};
   authReady=true;startSubs();render();
 }
 
 async function signOutAcademy(){
   for(const channel of [...activeChannels]){activeChannels.delete(channel);try{await sb.removeChannel(channel)}catch(e){}}
-  db=null;currentUser=null;currentRole=null;S.ready=true;S.dbOk=true;
+  db=null;currentUser=null;currentRole=null;currentCoachId=null;S.ready=true;S.dbOk=true;
   await sb.auth.signOut();authMessage='';render();
 }
 
