@@ -208,7 +208,7 @@ const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
 const planBaseEnd=p=>addDays(addMonths(p.start,p.months),-1);
 const nextTrainingDay=(date,days)=>{let d=date;for(let i=0;i<14;i++){d=addDays(d,1);if((days||[]).includes(parse(d).getDay()))return d}return addDays(date,1)};
-const planEnd=p=>{const base=planBaseEnd(p),st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(!bt||!(bt.days||[]).length)return base;const days=Object.values(S.cancellations).filter(c=>c&&!c.restoredAt&&['rain','pollution'].includes(String(c.reason||'').toLowerCase())&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));let end=base;for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}return end};
+const planEnd=p=>{const base=planBaseEnd(p),st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(!bt||!(bt.days||[]).length)return base;const days=Object.values(S.cancellations).filter(c=>c&&!c.restoredAt&&['rain','pollution','coach unavailable'].includes(String(c.reason||'').toLowerCase())&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));let end=base;for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}return end};
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
 function currentPlan(sid){let best=null;S.plans.forEach(p=>{if(p.studentId===sid&&(!best||p.start>best.start))best=p});return best}
 function feeRow(st){
@@ -548,14 +548,14 @@ function settingsForm(){
 
 /* ---------- attendance writes ---------- */
 async function persistCancellation(date,batchId,data){
-  return save(async()=>{const ref=db.doc('attendance/'+date),snap=await ref.get(),field='cancelledBatches.'+batchId;if(snap.exists)await ref.update({[field]:data});else await ref.set({cancelledBatches:{[batchId]:data}})});
+  return save(async()=>{const ref=db.doc('attendance/'+date),snap=await ref.get(),old=snap.exists?(snap.data()||{}):{},cancelledBatches=Object.assign({},old.cancelledBatches||{},{[batchId]:data});await ref.set(Object.assign({},old,{cancelledBatches}))});
 }
 function cancelSessionForm(){
   if(isCoach()||UI.attMode!=='students')return;
   const bt=S.batches.find(x=>x.id===UI.attBatch);if(!bt)return;
   if(!(bt.days||[]).includes(parse(UI.attDate).getDay())){toast('This date is not a scheduled training day for this batch.');return}
   const key=UI.attDate+'_'+bt.id;
-  openSheet({title:'Cancel session · '+bt.name,required:['reason'],submit:'Save cancellation',fields:[{k:'reason',label:'Select one cancellation reason',type:'select',options:[{v:'rain',t:'Rain'},{v:'pollution',t:'Pollution'},{v:'Holiday',t:'Holiday'}]}],values:{reason:'rain'},onSave:async v=>{const reason=v.reason;if(!['rain','pollution','Holiday'].includes(reason)){toast('Please select one cancellation reason.');return false}const data={date:UI.attDate,batchId:bt.id,reason,cancelledAt:new Date().toISOString()};const ok=await persistCancellation(UI.attDate,bt.id,data);if(!ok){toast('Could not save cancellation. Please check your connection or access and try again.');return false}S.attendanceCancellations[key]=data;S.cancellations[key]=data;render();return true}});
+  openSheet({title:'Cancel session · '+bt.name,required:['reason'],submit:'Save cancellation',fields:[{k:'reason',label:'Select one cancellation reason',type:'select',options:[{v:'rain',t:'Rain'},{v:'pollution',t:'Pollution'},{v:'Holiday',t:'Holiday'},{v:'Coach Unavailable',t:'Coach Unavailable'}]}],values:{reason:'rain'},onSave:async v=>{const reason=v.reason;if(!['rain','pollution','Holiday','Coach Unavailable'].includes(reason)){toast('Please select one cancellation reason.');return false}const data={date:UI.attDate,batchId:bt.id,reason,cancelledAt:new Date().toISOString()};const ok=await persistCancellation(UI.attDate,bt.id,data);if(!ok){toast('Could not save cancellation. Please check your connection or access and try again.');return false}S.attendanceCancellations[key]=data;S.cancellations[key]=data;render();return true}});
 }
 async function mark(kind,id,val){
   const isS=kind==='s';
