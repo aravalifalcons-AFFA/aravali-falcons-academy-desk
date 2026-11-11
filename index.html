@@ -199,7 +199,8 @@ const stuList=()=>S.students.filter(inC);
 const batchList=()=>S.batches.filter(inC);
 const coachIn=(c,cid)=>(c.centerIds||[]).includes(cid);
 const coachList=()=>S.coaches.filter(c=>UI.center==='all'||coachIn(c,UI.center));
-const activeStudents=()=>stuList().filter(s=>s.status!=='inactive');
+const studentStatus=s=>s&&s.status==='paused'&&s.pauseEnd&&s.pauseEnd<today()?'active':(s&&s.status)||'active';
+const activeStudents=()=>stuList().filter(s=>studentStatus(s)==='active');
 const batchName=id=>{const b=S.batches.find(x=>x.id===id);return b?b.name:'No batch'};
 const coachName=id=>{const c=S.coaches.find(x=>x.id===id);return c?c.name:''};
 const academyName=()=>S.settings.name||DEFAULT_NAME;
@@ -208,7 +209,7 @@ const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
 const planBaseEnd=p=>addDays(addMonths(p.start,p.months),-1);
 const nextTrainingDay=(date,days)=>{let d=date;for(let i=0;i<14;i++){d=addDays(d,1);if((days||[]).includes(parse(d).getDay()))return d}return addDays(date,1)};
-const planEnd=p=>{const base=planBaseEnd(p),st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(!bt||!(bt.days||[]).length)return base;const days=Object.values(S.cancellations).filter(c=>c&&!c.restoredAt&&['rain','pollution','coach unavailable'].includes(String(c.reason||'').toLowerCase())&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));let end=base;for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}return end};
+const planEnd=p=>{let end=planBaseEnd(p);const st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(bt&&(bt.days||[]).length){const days=Object.values(S.cancellations).filter(c=>c&&!c.restoredAt&&['rain','pollution','coach unavailable'].includes(String(c.reason||'').toLowerCase())&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}}const pauses=(st&&st.pauseHistory)||[];for(const pause of pauses){if(pause.start&&pause.end&&pause.start<=end&&pause.end>=p.start){const from=pause.start<p.start?p.start:pause.start,to=pause.end>end?end:pause.end;const days=Math.max(0,diffDays(to,from)+1);end=addDays(end,days)}}return end};
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
 function currentPlan(sid){let best=null;S.plans.forEach(p=>{if(p.studentId===sid&&(!best||p.start>best.start))best=p});return best}
 function feeRow(st){
@@ -320,7 +321,7 @@ function viewAttendance(){
   h+='</div>';
   if(UI.attMode==='students'){
     if(!b.length)return h+'<div class="panel empty"><h3>No batches at this center</h3><p>Create a batch and add students to start taking attendance.</p><div class="row"><button class="btn primary" data-act="addbatch">Add a batch</button></div></div>';
-    const bt=b.find(x=>x.id===UI.attBatch),st=S.students.filter(s=>s.status!=='inactive'&&s.batchId===UI.attBatch),rec=Object.assign({},S.att[UI.attDate]||{},Object.fromEntries(S.attNormalized.filter(x=>x.attendance_date===UI.attDate).map(x=>[x.student_id,x.status])));
+    const bt=b.find(x=>x.id===UI.attBatch),st=S.students.filter(s=>studentStatus(s)==='active'&&s.batchId===UI.attBatch),rec=Object.assign({},S.att[UI.attDate]||{},Object.fromEntries(S.attNormalized.filter(x=>x.attendance_date===UI.attDate).map(x=>[x.student_id,x.status])));
     const c=v=>st.filter(s=>rec[s.id]===v).length,un=st.filter(s=>!rec[s.id]).length;
     const sched=bt&&(bt.days||[]).includes(parse(UI.attDate).getDay());
     const cancelled=S.cancellations[UI.attDate+'_'+UI.attBatch];
@@ -344,7 +345,7 @@ function attRow(id,name,sub,val,kind){
 }
 
 function viewStudents(){
-  if(isCoach()){const ids=coachBatchIds(),q=UI.q.trim().toLowerCase(),list=S.students.filter(s=>ids.includes(s.batchId)&&(s.status||'active')!=='inactive'&&(!q||(s.name||'').toLowerCase().includes(q)||(s.guardian||'').toLowerCase().includes(q)||(s.phone||'').includes(q)));let h='<div class="pagehead"><div><h2>My students</h2><p>Only students in your assigned batches.</p></div></div><div class="ctl"><label>Search<input type="search" id="q" data-bind="q" placeholder="Student, guardian or phone" value="'+esc(UI.q)+'"></label></div>';return h+(list.length?'<div class="panel list">'+list.map(s=>'<div class="item"><div class="grow"><div class="name">'+esc(s.name)+'</div><div class="sub">'+esc(batchName(s.batchId))+(s.guardian?' · Guardian: '+esc(s.guardian):'')+(s.phone?' · '+esc(s.phone):'')+'</div></div></div>').join('')+'</div>':'<div class="panel empty">No students are assigned to your batches yet.</div>')}
+  if(isCoach()){const ids=coachBatchIds(),q=UI.q.trim().toLowerCase(),list=S.students.filter(s=>ids.includes(s.batchId)&&studentStatus(s)==='active'&&(!q||(s.name||'').toLowerCase().includes(q)||(s.guardian||'').toLowerCase().includes(q)||(s.phone||'').includes(q)));let h='<div class="pagehead"><div><h2>My students</h2><p>Only students in your assigned batches.</p></div></div><div class="ctl"><label>Search<input type="search" id="q" data-bind="q" placeholder="Student, guardian or phone" value="'+esc(UI.q)+'"></label></div>';return h+(list.length?'<div class="panel list">'+list.map(s=>'<div class="item"><div class="grow"><div class="name">'+esc(s.name)+'</div><div class="sub">'+esc(batchName(s.batchId))+(s.guardian?' · Guardian: '+esc(s.guardian):'')+(s.phone?' · '+esc(s.phone):'')+'</div></div></div>').join('')+'</div>':'<div class="panel empty">No students are assigned to your batches yet.</div>')}
 
   const q=UI.q.trim().toLowerCase(),all=stuList(),act=activeStudents().length;
   const bl=batchList();if(UI.stuBatch&&!bl.find(b=>b.id===UI.stuBatch))UI.stuBatch='';
@@ -355,8 +356,8 @@ function viewStudents(){
   if(!list.length)return h+'<div class="panel empty">No students match that search.</div>';
   h+='<div class="panel list">'+list.map(s=>{
     const p=attPct(s.id),r=feeRow(s),a=ageOf(s.dob);
-    return '<div class="item"><div class="avatar" aria-hidden="true">'+esc(initials(s.name))+'</div><div class="grow"><div class="name">'+esc(s.name)+(s.status==='inactive'?' <span class="chip">Inactive</span>':'')+'</div><div class="sub">'+esc(batchName(s.batchId))+cTag(s)+(a!=null?' · '+a+' yrs':'')+(s.guardian?' · '+esc(s.guardian):'')+(s.phone?' · '+esc(s.phone):'')+'</div></div>'+
-      '<div class="end">'+(p!=null?'<span class="chip '+(p>=75?'ok':p>=50?'warn':'bad')+'" title="Attendance, last 60 days">'+p+'% attended</span>':'')+(s.status==='inactive'?'':feeChips(r))+'<button class="btn sm" data-act="editstu" data-id="'+esc(s.id)+'">Edit</button></div></div>';
+    return '<div class="item"><div class="avatar" aria-hidden="true">'+esc(initials(s.name))+'</div><div class="grow"><div class="name">'+esc(s.name)+(studentStatus(s)==='paused'?' <span class="chip warn">Subscription paused</span>':studentStatus(s)==='inactive'?' <span class="chip">Inactive</span>':'')+'</div><div class="sub">'+esc(batchName(s.batchId))+cTag(s)+(a!=null?' · '+a+' yrs':'')+(s.guardian?' · '+esc(s.guardian):'')+(s.phone?' · '+esc(s.phone):'')+'</div></div>'+
+      '<div class="end">'+(p!=null?'<span class="chip '+(p>=75?'ok':p>=50?'warn':'bad')+'" title="Attendance, last 60 days">'+p+'% attended</span>':'')+(studentStatus(s)==='active'?feeChips(r):'')+'<button class="btn sm" data-act="editstu" data-id="'+esc(s.id)+'">Edit</button></div></div>';
   }).join('')+'</div>';
   return h;
 }
@@ -366,7 +367,7 @@ function viewBatches(){
   let h='<div class="pagehead"><div><h2>Batches</h2><p>'+esc(scopeLabel())+' · training groups, schedules and coaches.</p></div><button class="btn primary" data-act="addbatch">Add batch</button></div>';
   if(!bl.length)return h+emptySetup();
   h+='<div class="grid">'+bl.map(b=>{
-    const n=S.students.filter(s=>s.status!=='inactive'&&s.batchId===b.id).length;
+    const n=S.students.filter(s=>studentStatus(s)==='active'&&s.batchId===b.id).length;
     return '<div class="panel"><h3>'+esc(b.name)+'</h3>'+(UI.center==='all'?'<div><span class="chip ok">'+esc(centerName(b.centerId))+'</span></div>':'')+'<div class="days" aria-label="Training days">'+DAY.map((d,i)=>'<span class="'+((b.days||[]).includes(i)?'on':'')+'">'+d+'</span>').join('')+'</div>'+
       '<div style="color:var(--muted);font-size:14px">'+(b.time?esc(time12(b.time)):'No time set')+' · '+n+' student'+(n===1?'':'s')+'</div>'+
       '<div style="color:var(--muted);font-size:14px">'+((b.coachIds||[]).map(coachName).filter(Boolean).join(', ')||'No coach assigned')+'</div>'+
@@ -480,22 +481,43 @@ function wirePlanFee(prefix,cid){
 }
 function studentForm(id){
   const ex=id?S.students.find(s=>s.id===id):null;
-  const cid=ex?ex.centerId:defCenter();
+  const cid=ex?ex.centerId:defCenter(),plan=ex?currentPlan(ex.id):null;
   const fields=[{k:'name',label:'Full name'},{k:'centerId',label:'Center',type:'select',options:centerOpts()},{k:'batchId',label:'Batch',type:'select',options:batchOpts(cid)},{k:'dob',label:'Date of birth',type:'date'},{k:'guardian',label:'Parent or guardian'},{k:'phone',label:'Phone number',type:'tel'},{k:'joined',label:'Joined on',type:'date'}];
-  if(ex)fields.push({k:'status',label:'Status',type:'select',options:[{v:'active',t:'Active'},{v:'inactive',t:'Inactive (left the academy)'}]});
+  if(ex)fields.push({k:'status',label:'Status',type:'select',options:[{v:'paused',t:'Subscription paused'},{v:'inactive',t:'Inactive'},{v:'active',t:'Active'}]},{k:'pauseStart',label:'Pause starts on',type:'date'},{k:'pauseEnd',label:'Pause ends on',type:'date'});
   else fields.push({k:'months',label:'Fee plan',type:'select',options:planOpts(cid)},{k:'start',label:'Plan starts on',type:'date'},{k:'fee',label:'Plan fee (₹)',type:'number'});
-  const values=ex||{centerId:cid,batchId:'',joined:today(),status:'active',months:3,start:today(),fee:planPrice(3,cid)||''};
+  const values=ex?Object.assign({},ex,{status:studentStatus(ex),pauseStart:ex.pauseStart||today(),pauseEnd:ex.pauseEnd||addDays(today(),7)}):{centerId:cid,batchId:'',joined:today(),status:'active',months:3,start:today(),fee:planPrice(3,cid)||''};
   openSheet({title:ex?'Edit student':'Add student',required:['name'],fields,values,del:ex?{kind:'student',id:ex.id}:null,
     afterOpen(){
       const cs=document.getElementById('f_centerId'),bs=document.getElementById('f_batchId');
       cs.addEventListener('change',()=>{bs.innerHTML=batchOpts(cs.value).map(o=>'<option value="'+esc(o.v)+'">'+esc(o.t)+'</option>').join('')});
       if(ex&&ex.batchId)bs.value=ex.batchId;
+      const status=document.getElementById('f_status'),ps=document.getElementById('f_pauseStart'),pe=document.getElementById('f_pauseEnd');
+      const togglePause=()=>{[ps,pe].forEach(el=>{if(el)el.parentElement.style.display=status.value==='paused'?'':'none'})};
+      if(status){status.addEventListener('change',togglePause);togglePause()}
       wirePlanFee(null,cid);
     },
     async onSave(v){
-      const sid=id||db.collection('students').doc().id;
+      const sid=id||db.collection('students').doc().id,oldStatus=ex?studentStatus(ex):'active';
+      if(ex&&v.status==='paused'&&(!v.pauseStart||!v.pauseEnd||v.pauseEnd<v.pauseStart)){toast('Please select a valid pause start and end date.');return false}
       const rec=Object.assign({},ex||{},{name:v.name,centerId:v.centerId,batchId:v.batchId,dob:v.dob,guardian:v.guardian,phone:v.phone,joined:v.joined});
-      if(ex)rec.status=v.status;else rec.status='active';
+      if(ex){
+        rec.status=v.status;
+        if(v.status==='paused'){
+          let history=(ex.pauseHistory||[]).slice();
+          if(ex.pauseStart&&ex.pauseEnd)history=history.filter(p=>!(p.start===ex.pauseStart&&p.end===ex.pauseEnd));
+          history.push({start:v.pauseStart,end:v.pauseEnd});
+          rec.pauseHistory=history;rec.pauseStart=v.pauseStart;rec.pauseEnd=v.pauseEnd;
+        }
+        if(v.status==='active'&&oldStatus!=='active'){
+          const naturalExpiry=ex.status==='paused'&&ex.pauseEnd&&ex.pauseEnd<today();
+          if(!naturalExpiry){
+            if(!plan){toast('No existing subscription plan was found. Please add a plan before reactivating.');return false}
+            const renewed=await putDoc('plans',null,{studentId:sid,months:Number(plan.months)||3,start:today(),fee:Number(plan.fee)||0});
+            if(!renewed)return false;
+          }
+          rec.pauseStart='';rec.pauseEnd='';
+        }
+      }else rec.status='active';
       delete rec.id;
       const ok=await putDoc('students',sid,rec);
       if(ok&&!ex)await putDoc('plans',null,{studentId:sid,months:Number(v.months),start:v.start||today(),fee:v.fee||0});
