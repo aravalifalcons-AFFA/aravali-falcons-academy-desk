@@ -208,7 +208,7 @@ const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
 const planBaseEnd=p=>addDays(addMonths(p.start,p.months),-1);
 const nextTrainingDay=(date,days)=>{let d=date;for(let i=0;i<14;i++){d=addDays(d,1);if((days||[]).includes(parse(d).getDay()))return d}return addDays(date,1)};
-const planEnd=p=>{const base=planBaseEnd(p),st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(!bt||!(bt.days||[]).length)return base;const n=Object.values(S.cancellations).filter(c=>c&&c.batchId===bt.id&&c.date>=p.start&&c.date<=base).length;let end=base;for(let i=0;i<n;i++)end=nextTrainingDay(end,bt.days);return end};
+const planEnd=p=>{const base=planBaseEnd(p),st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(!bt||!(bt.days||[]).length)return base;const days=Object.values(S.cancellations).filter(c=>c&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));let end=base;for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}return end};
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
 function currentPlan(sid){let best=null;S.plans.forEach(p=>{if(p.studentId===sid&&(!best||p.start>best.start))best=p});return best}
 function feeRow(st){
@@ -235,13 +235,13 @@ function subColl(name,path,apply){
 }
 const rows=snap=>snap.docs.map(d=>Object.assign({id:d.id},d.data()));
 const byName=(a,b)=>String(a.name).localeCompare(String(b.name));
-function checkReady(){const needed=currentRole==='coach'?['students','batches','coaches','attNormalized']:['students','batches','coaches','plans','att','catt','cancellations','pays','settings'];if(!S.ready&&needed.every(k=>S.loaded[k]))S.ready=true}
+function checkReady(){const needed=currentRole==='coach'?['students','batches','coaches','attNormalized','cancellations']:['students','batches','coaches','plans','att','catt','cancellations','pays','settings'];if(!S.ready&&needed.every(k=>S.loaded[k]))S.ready=true}
 function loadNormalizedAttendance(){const refresh=async()=>{const {data,error}=await sb.from('academy_attendance').select('attendance_date,student_id,status,updated_at');if(error){S.dbOk=false;S.ready=true;schedule();return}S.attNormalized=data||[];S.loaded.attNormalized=true;checkReady();schedule()};refresh();const ch=sb.channel('affa-attendance-live').on('postgres_changes',{event:'*',schema:'public',table:'academy_attendance'},refresh).subscribe();activeChannels.add(ch)}
 function startSubs(){
   subColl('students','students',s=>{S.students=rows(s).sort(byName)});
   subColl('batches','batches',s=>{S.batches=rows(s).sort(byName)});
   subColl('coaches','coaches',s=>{S.coaches=rows(s).sort(byName)});
-  if(currentRole!=='coach')subColl('cancellations','sessionCancellations',s=>{S.cancellations={};s.docs.forEach(d=>{S.cancellations[d.id]=d.data()})});
+  subColl('cancellations','sessionCancellations',s=>{S.cancellations={};s.docs.forEach(d=>{S.cancellations[d.id]=d.data()})});
   loadNormalizedAttendance();
   if(currentRole!=='coach'){
     subColl('plans','plans',s=>{S.plans=rows(s)});
