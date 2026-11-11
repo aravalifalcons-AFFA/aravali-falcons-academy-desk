@@ -209,7 +209,7 @@ const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
 const planBaseEnd=p=>addDays(addMonths(p.start,p.months),-1);
 const nextTrainingDay=(date,days)=>{let d=date;for(let i=0;i<14;i++){d=addDays(d,1);if((days||[]).includes(parse(d).getDay()))return d}return addDays(date,1)};
-const planEnd=p=>{let end=planBaseEnd(p);const st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(bt&&(bt.days||[]).length){const days=Object.values(S.cancellations).filter(c=>c&&!c.restoredAt&&['rain','pollution','coach unavailable'].includes(String(c.reason||'').toLowerCase())&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}}const pauses=(st&&st.pauseHistory)||[];for(const pause of pauses){if(pause.start&&pause.end&&pause.start<=end&&pause.end>=p.start){const from=pause.start<p.start?p.start:pause.start,to=pause.end>end?end:pause.end;const days=Math.max(0,diffDays(to,from)+1);end=addDays(end,days)}}return end};
+const planEnd=p=>{let end=planBaseEnd(p);const st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(bt&&(bt.days||[]).length){const days=Object.values(S.cancellations).filter(c=>c&&!c.restoredAt&&['rain','pollution','coach unavailable'].includes(String(c.reason||'').toLowerCase())&&c.batchId===bt.id&&c.date>=p.start).sort((a,b)=>String(a.date).localeCompare(String(b.date)));for(const c of days){if(c.date<=end)end=nextTrainingDay(end,bt.days)}}const pauses=(st&&st.pauseHistory)||[];for(const pause of pauses){if(pause.start&&pause.end&&pause.start<=end&&pause.end>=p.start){const from=pause.start<p.start?p.start:pause.start;const days=Math.max(0,diffDays(pause.end,from)+1);end=addDays(end,days)}}return end};
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
 function currentPlan(sid){let best=null;S.plans.forEach(p=>{if(p.studentId===sid&&(!best||p.start>best.start))best=p});return best}
 function feeRow(st){
@@ -508,10 +508,12 @@ function studentForm(id){
           history.push({start:v.pauseStart,end:v.pauseEnd});
           rec.pauseHistory=history;rec.pauseStart=v.pauseStart;rec.pauseEnd=v.pauseEnd;
         }
-        if(v.status==='active'&&oldStatus!=='active'){
+        if(v.status==='active'){
           const naturalExpiry=ex.status==='paused'&&ex.pauseEnd&&ex.pauseEnd<today();
-          if(!naturalExpiry){
+          if(oldStatus!=='active'&&!naturalExpiry){
             if(!plan){toast('No existing subscription plan was found. Please add a plan before reactivating.');return false}
+            const history=(ex.pauseHistory||[]).filter(p=>!(p.start===ex.pauseStart&&p.end===ex.pauseEnd));
+            rec.pauseHistory=history;
             const renewed=await putDoc('plans',null,{studentId:sid,months:Number(plan.months)||3,start:today(),fee:Number(plan.fee)||0});
             if(!renewed)return false;
           }
