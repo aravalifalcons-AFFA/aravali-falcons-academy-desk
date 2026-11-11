@@ -177,7 +177,7 @@ const centerShort=id=>(CENTERS.find(c=>c.id===id)||{}).short||'';
 const DEFAULT_NAME='ARAVALI FALCONS FOOTBALL ACADEMY';
 const PLANS=[3,6,12];
 
-const S={students:[],batches:[],coaches:[],plans:[],att:{},catt:{},pays:[],settings:{},attNormalized:[],loaded:{},ready:false,dbOk:true};
+const S={students:[],batches:[],coaches:[],plans:[],att:{},catt:{},cancellations:{},pays:[],settings:{},attNormalized:[],loaded:{},ready:false,dbOk:true};
 function getPref(k,d){try{return localStorage.getItem(k)||d}catch(e){return d}}
 function setPref(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 const UI={center:CENTERS.some(c=>c.id===getPref('ad_center',''))?getPref('ad_center',''):'all',attCenter:'',attDate:today(),attBatch:'',attMode:'students',q:'',stuBatch:'',feeMonth:today().slice(0,7),feeFilter:'all'};
@@ -206,7 +206,9 @@ const academyName=()=>S.settings.name||DEFAULT_NAME;
 const graceDays=()=>{const n=Number(S.settings.dueDays);return n>=0&&S.settings.dueDays!==undefined&&S.settings.dueDays!==''?n:7};
 const planPrice=(m,cid)=>Number(S.settings['price'+m+'_'+(cid||defCenter())]??S.settings['price'+m])||0;
 const attCenter=()=>UI.center!=='all'?UI.center:(UI.attCenter||CENTERS[0].id);
-const planEnd=p=>addDays(addMonths(p.start,p.months),-1);
+const planBaseEnd=p=>addDays(addMonths(p.start,p.months),-1);
+const nextTrainingDay=(date,days)=>{let d=date;for(let i=0;i<14;i++){d=addDays(d,1);if((days||[]).includes(parse(d).getDay()))return d}return addDays(date,1)};
+const planEnd=p=>{const base=planBaseEnd(p),st=S.students.find(x=>x.id===p.studentId),bt=st&&S.batches.find(x=>x.id===st.batchId);if(!bt||!(bt.days||[]).length)return base;const n=Object.values(S.cancellations).filter(c=>c&&c.batchId===bt.id&&c.date>=p.start&&c.date<=base).length;let end=base;for(let i=0;i<n;i++)end=nextTrainingDay(end,bt.days);return end};
 const planPaid=p=>S.pays.filter(x=>x.planId===p.id).reduce((a,x)=>a+(Number(x.amount)||0),0);
 function currentPlan(sid){let best=null;S.plans.forEach(p=>{if(p.studentId===sid&&(!best||p.start>best.start))best=p});return best}
 function feeRow(st){
@@ -233,12 +235,13 @@ function subColl(name,path,apply){
 }
 const rows=snap=>snap.docs.map(d=>Object.assign({id:d.id},d.data()));
 const byName=(a,b)=>String(a.name).localeCompare(String(b.name));
-function checkReady(){const needed=currentRole==='coach'?['students','batches','coaches','attNormalized']:['students','batches','coaches','plans','att','catt','pays','settings'];if(!S.ready&&needed.every(k=>S.loaded[k]))S.ready=true}
+function checkReady(){const needed=currentRole==='coach'?['students','batches','coaches','attNormalized']:['students','batches','coaches','plans','att','catt','cancellations','pays','settings'];if(!S.ready&&needed.every(k=>S.loaded[k]))S.ready=true}
 function loadNormalizedAttendance(){const refresh=async()=>{const {data,error}=await sb.from('academy_attendance').select('attendance_date,student_id,status,updated_at');if(error){S.dbOk=false;S.ready=true;schedule();return}S.attNormalized=data||[];S.loaded.attNormalized=true;checkReady();schedule()};refresh();const ch=sb.channel('affa-attendance-live').on('postgres_changes',{event:'*',schema:'public',table:'academy_attendance'},refresh).subscribe();activeChannels.add(ch)}
 function startSubs(){
   subColl('students','students',s=>{S.students=rows(s).sort(byName)});
   subColl('batches','batches',s=>{S.batches=rows(s).sort(byName)});
   subColl('coaches','coaches',s=>{S.coaches=rows(s).sort(byName)});
+  if(currentRole!=='coach')subColl('cancellations','sessionCancellations',s=>{S.cancellations={};s.docs.forEach(d=>{S.cancellations[d.id]=d.data()})});
   loadNormalizedAttendance();
   if(currentRole!=='coach'){
     subColl('plans','plans',s=>{S.plans=rows(s)});
@@ -319,8 +322,10 @@ function viewAttendance(){
     const bt=b.find(x=>x.id===UI.attBatch),st=S.students.filter(s=>s.status!=='inactive'&&s.batchId===UI.attBatch),rec=Object.assign({},S.att[UI.attDate]||{},Object.fromEntries(S.attNormalized.filter(x=>x.attendance_date===UI.attDate).map(x=>[x.student_id,x.status])));
     const c=v=>st.filter(s=>rec[s.id]===v).length,un=st.filter(s=>!rec[s.id]).length;
     const sched=bt&&(bt.days||[]).includes(parse(UI.attDate).getDay());
+    const cancelled=S.cancellations[UI.attDate+'_'+UI.attBatch];
+    if(cancelled){h+='<div class="panel" style="padding:16px;border-color:var(--bad)"><div class="name">Session cancelled</div><div class="sub" style="margin-top:6px">Reason: '+esc(cancelled.reason||'No reason provided')+'</div>'+(isCoach()?'':'<div style="margin-top:12px"><button class="btn sm" data-act="restoresession" data-id="'+esc(UI.attDate+'_'+UI.attBatch)+'">Restore session</button></div>')+'</div>';return h}
     h+='<div class="row" style="justify-content:space-between"><div class="tally"><span><b>'+c('P')+'</b> present</span><span><b>'+c('A')+'</b> absent</span><span><b>'+c('L')+'</b> late</span><span><b>'+un+'</b> unmarked</span></div>'+
-      '<div class="row">'+(bt&&!sched?'<span class="chip warn">Not a usual session day</span>':'')+(st.length&&!isCoach()?'<button class="btn sm" data-act="attall">Mark all present</button>':'')+'</div></div>';
+      '<div class="row">'+(bt&&!sched?'<span class="chip warn">Not a usual session day</span>':'')+(st.length&&!isCoach()?'<button class="btn sm" data-act="attall">Mark all present</button><button class="btn sm danger" data-act="cancelsession">Cancel session</button>':'')+'</div></div>';
     if(!st.length)return h+'<div class="panel empty"><p>No students in this batch yet.</p><div class="row"><button class="btn primary" data-act="addstu">Add a student</button></div></div>';
     h+='<div class="panel list">'+st.map(s=>attRow(s.id,s.name,batchName(s.batchId),rec[s.id],'s')).join('')+'</div>';
   }else{
@@ -541,8 +546,16 @@ function settingsForm(){
 }
 
 /* ---------- attendance writes ---------- */
+function cancelSessionForm(){
+  if(isCoach()||UI.attMode!=='students')return;
+  const bt=S.batches.find(x=>x.id===UI.attBatch);if(!bt)return;
+  if(!(bt.days||[]).includes(parse(UI.attDate).getDay())){toast('This date is not a scheduled training day for this batch.');return}
+  const key=UI.attDate+'_'+bt.id;
+  openSheet({title:'Cancel session · '+bt.name,required:['reason'],submit:'Save cancellation',fields:[{k:'reason',label:'Cancellation reason',type:'textarea',ph:'For example: heavy rain, ground unavailable, coach unavailable'}],values:{reason:''},onSave:async v=>{const data={date:UI.attDate,batchId:bt.id,reason:String(v.reason||'').trim(),cancelledAt:new Date().toISOString()};if(!data.reason){toast('Please enter a cancellation reason.');return false}const ok=await putDoc('sessionCancellations',key,data);if(ok){S.cancellations[key]=data;render()}return ok}});
+}
 async function mark(kind,id,val){
   const isS=kind==='s';
+  if(isS&&S.cancellations[UI.attDate+'_'+(S.students.find(x=>x.id===id)||{}).batchId]){toast('This session is cancelled; attendance cannot be marked.');return}
   if(isCoach()&&isS){if(!S.students.some(s=>s.id===id&&coachBatchIds().includes(s.batchId))){toast('You can only mark students in your assigned batches.');return}const row={attendance_date:UI.attDate,student_id:id,status:val,updated_by:currentUser.id};const {error}=await sb.from('academy_attendance').upsert(row,{onConflict:'attendance_date,student_id'});if(error){toast('Attendance could not be saved: '+error.message);return}const old=S.attNormalized.findIndex(x=>x.attendance_date===UI.attDate&&x.student_id===id);if(old>=0)S.attNormalized[old]=row;else S.attNormalized.push(row);render();return}
   if(isCoach())return;
   const coll=isS?'attendance':'coachAttendance',key=isS?UI.attDate:UI.attDate+'_'+attCenter(),cache=isS?S.att:S.catt;
@@ -551,6 +564,7 @@ async function mark(kind,id,val){
     if(snap.exists)await ref.update(isS?{records:{[id]:val},sample:false}:{records:{[id]:val},sample:false});else await ref.set({records:{[id]:val}})});
 }
 function markAll(){
+  if(S.cancellations[UI.attDate+'_'+UI.attBatch]){toast('This session is cancelled; attendance cannot be marked.');return}
   const ids=S.students.filter(s=>s.status!=='inactive'&&s.batchId===UI.attBatch).map(s=>s.id),date=UI.attDate;if(!ids.length)return;
   const patch={};ids.forEach(i=>patch[i]='P');
   S.att[date]=Object.assign({},S.att[date]||{},patch);render();
@@ -630,6 +644,8 @@ document.addEventListener('click',e=>{
     case 'attprev':UI.attDate=addDays(UI.attDate,-1);render();break;
     case 'attnext':UI.attDate=addDays(UI.attDate,1);render();break;
     case 'attall':markAll();break;
+    case 'cancelsession':cancelSessionForm();break;
+    case 'restoresession':(async()=>{if(await delDoc('sessionCancellations',id)){delete S.cancellations[id];render();toast('Session restored.')}})();break;
     case 'mark':mark(el.dataset.k,id,el.dataset.v);break;
     case 'takeatt':{const b=S.batches.find(x=>x.id===id);UI.attMode='students';UI.attBatch=id;if(b&&UI.center==='all')UI.attCenter=b.centerId;UI.attDate=today();location.hash='attendance';render();break}
     case 'feeprev':UI.feeMonth=ymd(new Date(parse(UI.feeMonth+'-01').getFullYear(),parse(UI.feeMonth+'-01').getMonth()-1,1)).slice(0,7);render();break;
